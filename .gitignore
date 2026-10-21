@@ -3,3 +3,6 @@ build/
 local.properties
 *.iml
 .idea/
+.cxx/
+app/src/main/cpp/sd/
+build.log

@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Internet is only used for the optional one-time model download. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:label="RealGen"
-        android:usesCleartextTraffic="true"
+        android:label="RealGen Offline"
+        android:largeHeap="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
         <activity

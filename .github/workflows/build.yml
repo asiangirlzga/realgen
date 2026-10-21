@@ -2,8 +2,12 @@ name: Build APK
 
 on:
   push:
-    branches: [main, master]
+    branches: ["**"]
   workflow_dispatch:
+
+env:
+  # stable-diffusion.cpp commit the JNI wrapper was written against.
+  SD_COMMIT: 0518b34374761cb82aeda5ad3c2f0686fdad2cec
 
 jobs:
   build:
@@ -16,18 +20,35 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Fetch stable-diffusion.cpp (pinned)
+        run: |
+          mkdir -p app/src/main/cpp/sd
+          cd app/src/main/cpp/sd
+          git init -q
+          git remote add origin https://github.com/leejet/stable-diffusion.cpp
+          git fetch -q --depth 1 origin "$SD_COMMIT"
+          git checkout -q FETCH_HEAD
+          git submodule update --init --depth 1 ggml
+          git log -1 --oneline
 
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.7"
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        run: |
+          set +e
+          gradle assembleDebug --no-daemon --console=plain 2>&1 | tee build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            # Surface the last log lines as annotations so failures are easy to read.
+            grep -nE "error|Error|FAILED|What went wrong|undefined|cannot find" build.log | tail -40 | while IFS= read -r line; do
+              echo "::error::${line:0:900}"
+            done
+          fi
+          exit $code
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RealGen-debug-apk
+          name: RealGenOffline-debug-apk
           path: app/build/outputs/apk/debug/*.apk
