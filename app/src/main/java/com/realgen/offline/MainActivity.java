@@ -171,6 +171,11 @@ public class MainActivity extends Activity {
         btnLora = button("Import LoRA (.safetensors)", v -> pick(REQ_LORA));
         btnLcm = button("Download speed LoRA (LCM, 135 MB)", v -> downloadLcm());
         root.addView(row(btnLora, btnLcm));
+        root.addView(button("Use no LoRA", v -> {
+            loraPath = "";
+            refresh();
+            setStatus("LoRA cleared. Generating without LoRA.");
+        }));
         loraStrength = edit("1.0", "1.0", 1);
         loraStrength.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         root.addView(labeled("LoRA strength", loraStrength));
@@ -448,6 +453,39 @@ public class MainActivity extends Activity {
         }).start();
     }
 
+    /** Returns null if the LoRA looks usable with SD 1.5, otherwise a message. */
+    private String checkLora(File f) {
+        try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r")) {
+            byte[] lb = new byte[8];
+            r.readFully(lb);
+            long n = 0;
+            for (int i = 7; i >= 0; i--) n = (n << 8) | (lb[i] & 0xFF);
+            if (n <= 0 || n > 100000000L) return "This does not look like a valid .safetensors LoRA file.";
+            byte[] hb = new byte[(int) n];
+            r.readFully(hb);
+            org.json.JSONObject h = new org.json.JSONObject(new String(hb, "UTF-8"));
+            java.util.Iterator<String> it = h.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                if (k.contains("attn2") && k.contains("to_k")
+                        && (k.contains("lora_down") || k.contains("lora_A"))) {
+                    org.json.JSONArray sh = h.getJSONObject(k).getJSONArray("shape");
+                    if (sh.length() != 2) continue;
+                    int in = sh.getInt(1);
+                    if (in == 768) return null;
+                    if (in == 2048) {
+                        return "This LoRA is for SDXL and cannot be used with the SD 1.5 model. "
+                                + "Use an SD 1.5 LoRA (or tap 'Use no LoRA').";
+                    }
+                    return "This LoRA is not for SD 1.5 (input size " + in + "). Use an SD 1.5 LoRA.";
+                }
+            }
+            return null; // could not tell; allow
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String displayName(Uri uri) {
         try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
             if (c != null && c.moveToFirst()) {
@@ -499,6 +537,13 @@ public class MainActivity extends Activity {
         }
         final long finalSeed = sd;
         final String loraFile = loraPath;
+        if (!loraFile.isEmpty()) {
+            String bad = checkLora(new File(loraFile));
+            if (bad != null) {
+                setStatus(bad);
+                return;
+            }
+        }
 
         generating = true;
         setBusy(true);
