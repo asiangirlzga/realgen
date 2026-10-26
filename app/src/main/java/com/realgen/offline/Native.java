@@ -18,6 +18,9 @@ public final class Native {
         if (p != null) p.on(step, steps);
     }
 
+    /** Engine messages are appended to this file immediately (survives a crash). */
+    public static native void setLogFile(String path);
+
     public static native boolean load(String modelPath, int threads);
 
     /** Returns [width, height, ARGB pixels...] or null on failure / cancel. */

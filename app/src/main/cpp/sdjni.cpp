@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <android/log.h>
 
+#include <cstdio>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -19,8 +20,14 @@ static sd_ctx_t* g_ctx = nullptr;
 static std::mutex g_log_mu;
 static std::string g_log;
 
+static FILE* g_logf = nullptr;
+
 static void log_cb(enum sd_log_level_t level, const char* text, void*) {
     if (!text) return;
+    if (g_logf) {
+        fputs(text, g_logf);
+        fflush(g_logf);
+    }
     __android_log_print(level >= SD_LOG_WARN ? ANDROID_LOG_WARN : ANDROID_LOG_INFO, TAG, "%s", text);
     if (level >= SD_LOG_WARN) {
         std::lock_guard<std::mutex> l(g_log_mu);
@@ -65,6 +72,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     g_cls = static_cast<jclass>(env->NewGlobalRef(c));
     g_on_progress = env->GetStaticMethodID(g_cls, "onProgress", "(II)V");
     return JNI_VERSION_1_6;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_realgen_offline_Native_setLogFile(JNIEnv* env, jclass, jstring jpath) {
+    if (g_logf) {
+        fclose(g_logf);
+        g_logf = nullptr;
+    }
+    std::string p = to_str(env, jpath);
+    if (!p.empty()) g_logf = fopen(p.c_str(), "w");
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

@@ -71,6 +71,10 @@ public class MainActivity extends Activity {
     private String loadedPath = null;
     private String loraPath = "";
     private Bitmap bitmap;
+    private boolean nativeOk = false;
+    private String nativeError = "";
+    private TextView logView;
+    private android.content.SharedPreferences prefs;
 
     private final String[] sizes = {"512x512", "384x384", "512x768", "768x512", "448x640"};
 
@@ -206,11 +210,72 @@ public class MainActivity extends Activity {
         btnSave.setVisibility(View.GONE);
         root.addView(btnSave);
 
+        logView = new TextView(this);
+        logView.setTextColor(0xFFB0B8C4);
+        logView.setTextSize(11);
+        logView.setTypeface(android.graphics.Typeface.MONOSPACE);
+        logView.setTextIsSelectable(true);
+        logView.setPadding(0, dp(16), 0, 0);
+        root.addView(logView);
+        root.addView(button("Copy log", v -> copyLog()));
+
         ScrollView sv = new ScrollView(this);
         sv.addView(root);
         setContentView(sv);
 
+        // Report what happened last time (a native crash closes the app silently).
+        prefs = getSharedPreferences("state", MODE_PRIVATE);
+        String prevStage = prefs.getString("stage", "idle");
+        String prevLog = readLog();
+        try {
+            Native.sysInfo();
+            nativeOk = true;
+        } catch (Throwable t) {
+            nativeError = String.valueOf(t);
+        }
+        StringBuilder rep = new StringBuilder();
+        if (!nativeOk) rep.append("Native engine failed to load: ").append(nativeError).append("\n");
+        if (!"idle".equals(prevStage)) {
+            rep.append("Last run closed unexpectedly during: ").append(prevStage).append("\n");
+        }
+        if (!prevLog.isEmpty()) rep.append("--- engine log (end) ---\n").append(prevLog);
+        logView.setText(rep.toString());
+        prefs.edit().putString("stage", "idle").commit();
+
         refresh();
+    }
+
+    private File logFile() {
+        return new File(getExternalFilesDir(null), "engine.log");
+    }
+
+    private String readLog() {
+        try {
+            File f = logFile();
+            if (!f.exists()) return "";
+            long len = f.length();
+            int max = 3000;
+            try (java.io.RandomAccessFile r = new java.io.RandomAccessFile(f, "r")) {
+                long start = Math.max(0, len - max);
+                r.seek(start);
+                byte[] b = new byte[(int) (len - start)];
+                r.readFully(b);
+                return new String(b, "UTF-8");
+            }
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void copyLog() {
+        android.content.ClipboardManager cm =
+                (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("log", logView.getText()));
+        setStatus("Log copied.");
+    }
+
+    private void setStage(String s) {
+        if (prefs != null) prefs.edit().putString("stage", s).commit();
     }
 
     // ---------------------------------------------------------------- state
@@ -403,6 +468,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (busy) return;
+        if (!nativeOk) {
+            setStatus("Native engine failed to load: " + nativeError);
+            return;
+        }
         final File model = findModel();
         if (model == null) {
             setStatus("Download or import a model first.");
@@ -438,10 +507,13 @@ public class MainActivity extends Activity {
             btnGen.setEnabled(true);
         });
 
-        new Thread(() -> {
+        // Large stack: the native engine can overflow Android's default 1 MB thread stack.
+        new Thread(null, () -> {
             try {
                 if (!loaded || !model.getPath().equals(loadedPath)) {
                     setStatus("Loading model (first time takes a while)...");
+                    setStage("loading model");
+                    Native.setLogFile(logFile().getPath());
                     loaded = Native.load(model.getPath(), nThreads);
                     loadedPath = model.getPath();
                     if (!loaded) {
@@ -456,6 +528,7 @@ public class MainActivity extends Activity {
                             + (SystemClock.elapsedRealtime() - t0) / 1000 + "s)");
                 });
                 setStatus("Generating...");
+                setStage("generating image");
                 int[] r = Native.generate(fullPrompt, neg, loraFile, lora, w, h, nSteps, nCfg, finalSeed);
                 Native.progress = null;
                 if (r == null || r.length < 3) {
@@ -478,9 +551,10 @@ public class MainActivity extends Activity {
             } finally {
                 Native.progress = null;
                 generating = false;
+                setStage("idle");
                 setBusy(false);
             }
-        }).start();
+        }, "sd-worker", 128L * 1024 * 1024).start();
     }
 
     private static int clampInt(String s, int def, int lo, int hi) {
@@ -523,6 +597,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (isFinishing() && !generating) Native.unload();
+        if (nativeOk && isFinishing() && !generating) Native.unload();
     }
 }
